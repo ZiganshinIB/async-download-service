@@ -7,11 +7,12 @@ from sys import stdout
 import datetime
 import logging
 
+KB_multiplier = 2**10
+CHUNK_VOLUME = 200 * KB_multiplier  # 200Kb
 
-
-async def handler_archive(request):
+async def handler_archive(request, loading_path, delay=0):
     archive_hash = request.match_info['archive_hash']
-    path_files = os.path.join(args.loading_path, archive_hash)
+    path_files = os.path.join(loading_path, archive_hash)
     if not os.path.exists(path_files):
         return web.HTTPNotFound(text=f'Архив {archive_hash} не существует или был удален')
     load_process = await asyncio.create_subprocess_exec(
@@ -29,17 +30,18 @@ async def handler_archive(request):
     await response.prepare(request)
     try:
         while not load_process.stdout.at_eof():
-            chunk = await load_process.stdout.read(n=200*(2**10))
+            chunk = await load_process.stdout.read(n=CHUNK_VOLUME)
             logging.info(f'Sending archive chunk ...')
             await response.write(chunk)
-            if args.delay:
-                await asyncio.sleep(args.delay)
+            if delay:
+                await asyncio.sleep(delay)
     except asyncio.CancelledError as e:
         logging.warning(f'Download was interrupted')
         raise
     finally:
-        load_process.kill()
-        await load_process.communicate()
+        if load_process.returncode is None:
+            load_process.kill()
+            await load_process.communicate()
     return response
 
 
@@ -62,9 +64,10 @@ if __name__ == '__main__':
         )
     INTERVAL_SECS = args.delay
     app = web.Application()
+    archive = lambda request: handler_archive(request,loading_path=args.loading_path, delay=INTERVAL_SECS)
     app.add_routes([
         web.get('/', handle_index_page, ),
-        web.get('/archive/{archive_hash}/', handler_archive),
+        web.get('/archive/{archive_hash}/', archive),
 
     ])
     web.run_app(app)
